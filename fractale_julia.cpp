@@ -5,7 +5,7 @@
 #include <semaphore.h>
 
 /* Compile avec */
-/* g++ -Wall fractale_julia.cpp `pkg-config --cflags --libs opencv` -std=c++11*/
+/* g++ -Wall fractale_julia.cpp `pkg-config --cflags --libs opencv` -lpthread -std=c++11*/
 
 /* CONSTANTES *****************************************************************/
 
@@ -36,8 +36,11 @@ struct HSV
 };
 
 /* SÉMAPHORES ANONYMES */
-sem_t* sem_thread;	// associés aux threads
-sem_t* sem_matrice;	// associé à l'écriture de la matrice
+sem_t semRead;	// une seule lecture à la fois
+sem_t semWrite;	// une seule écriture à la fois
+
+// creation de l'image
+cv::Mat newImg(IMG_H, IMG_W, CV_8UC3);
 
 
 /* MANIPULER LES NOMBRES COMPLEXES ********************************************/
@@ -169,26 +172,34 @@ int juliaDot(complex z, int iter) {
     return i * 255 / iter; // on met i dans l'intervalle 0 à 255
 }
 
-void julia(cv::Mat& img) {
+void* julia(void* _p) {
     struct HSV data;
     struct RGB value;
 
-    for (int x = 0; x < IMG_W; x++) {
+		/* Verrouillage puis lecture échantillon */
+		sem_wait(&semRead);
+
+		/* Test contenu échantillon (dispo, NULL ou traité) */
+
+		sem_post(&semRead);
+		/* Début calcul fractale sur image entière */
+		for (int x = 0; x < IMG_W; x++) {
         for (int y = 0; y < IMG_H; y++) {
             int j = juliaDot(convert(x, y), MAX_ITER);
-            data.H = j;
+            data.H = j; // pour le moment 0-255 à convertir en 0-1 ?
             data.S = 1;
             data.V = 1;
             value = HSVToRGB(data);
             cv::Vec3b color(value.R, value.G, value.B);
             //cv::Vec3b color(j, j, j);
-            img.at<cv::Vec3b>(cv::Point(x, y)) = color;
+            newImg.at<cv::Vec3b>(cv::Point(x, y)) = color;
         }
     }
+		/* fin calcul fractale */
+	return NULL;
 }
 
 /* MAIN ***********************************************************************/
-
 int main(int argc, char * argv[]) {
 
 	/*const int nb_values = 4;
@@ -198,53 +209,66 @@ int main(int argc, char * argv[]) {
 																				{0.3, 0.5},};
 
 		int i;*/
-		long double c_real, c_imaginary;
-		int nb_thread, nb_sample;
-		pthread_t* id_thread;
+		long double cReal, cImaginary;
+		int nbThread, nbSample, i;
+		pthread_t* idThread;
 
 		/* Vérification des arguments */
-		// nb_thread, nb_sample, c_real, c_imaginary
+		// nbThread, nbSample, cReal, cImaginary
 		if (argc != 5) {
 				printf("Usage : <C réel> <C imaginaire> <nb threads> <nb échantillons>\n");
 	 			return 0;
 			}
 
 		// Voir la commande opencv commandlineparser ?
- 		c_real = strtold(argv[1], NULL);
-		c_imaginary = strtold(argv[2], NULL);
-		nb_thread = atoi(argv[3]);
-		nb_sample = atoi(argv[4]);
+ 		cReal = strtold(argv[1], NULL);
+		cImaginary = strtold(argv[2], NULL);
+		nbThread = atoi(argv[3]);
+		nbSample = atoi(argv[4]);
 
 		/* INITIALISATION THREADS, SEMAPHORES ET ECHANTILLONS *********************/
-		id_thread = (pthread_t*) malloc(nb_thread * sizeof(pthread_t));
-  	sem_thread = (sem_t*) malloc(nb_thread * sizeof(sem_t));
-
-    // creation de l'image
-    cv::Mat newImg(IMG_H, IMG_W, CV_8UC3);
+		idThread = (pthread_t*) malloc(nbThread * sizeof(pthread_t));
+		sem_init(&semRead, 0, 1);
+		sem_init(&semWrite, 0, 1);
 
 
-    //for (i = 0; i < nb_values; i++) {
-        // calcul de la fractale
-        //c = new_complex(c_values[i][0], c_values[i][1]);
-				c = new_complex(c_real, c_imaginary);
-        julia(newImg);
 
-        // interaction avec l'utilisateur
-        char key = -1; // -1 indique qu'aucune touche est enfoncée
 
-        // on attend 30ms une saisie clavier, key prend la valeur de la touche
-        // si aucune touche est enfoncée, au bout de 30ms on exécute quand même
-        // la boucle avec key = -1, l'image est mise à jour
-        while( (key = cvWaitKey(30)) ) {
-            if (key == 'q')
-                break;
-            imshow("image", newImg); // met à jour l'image
-        }
-        char name[15];
-        sprintf(name, "image.bmp");
-        imwrite(name, newImg); // sauve une copie de l'image
-        cvDestroyWindow("image"); // ferme la fenêtre
-    //}
+
+		c = new_complex(cReal, cImaginary);
+
+		/* CRÉATION DES THREADS ***************************************************/
+		for(i = 0; i < nbSample; i++) {
+	      pthread_create(&idThread[i], NULL, julia, NULL);
+	  }
+
+    //julia(newImg);
+
+		for(i = 0; i < nbSample; i++) {
+	    pthread_join(idThread[i], 0);
+	  }
+
+    // interaction avec l'utilisateur
+    char key = -1; // -1 indique qu'aucune touche est enfoncée
+
+    // on attend 30ms une saisie clavier, key prend la valeur de la touche
+    // si aucune touche est enfoncée, au bout de 30ms on exécute quand même
+    // la boucle avec key = -1, l'image est mise à jour
+    while( (key = cvWaitKey(30)) ) {
+        if (key == 'q')
+            break;
+        imshow("image", newImg); // met à jour l'image
+    }
+    char name[15];
+    sprintf(name, "image.bmp");
+    imwrite(name, newImg); // sauve une copie de l'image
+    cvDestroyWindow("image"); // ferme la fenêtre
+
+		/* NETTOYAGE **************************************************************/
+		sem_destroy(&semRead);
+		sem_destroy(&semWrite);
+
+		free(idThread);
 
     return 0;
 }
