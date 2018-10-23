@@ -1,9 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <opencv2/opencv.hpp>
+#include <pthread.h>
+#include <semaphore.h>
 
 /* Compile avec */
-/* g++ -Wall fractale_julia.cpp `pkg-config --cflags --libs opencv` -std=c++11 */
+/* g++ -Wall fractale_julia.cpp `pkg-config --cflags --libs opencv` -std=c++11*/
 
 /* CONSTANTES *****************************************************************/
 
@@ -17,7 +19,8 @@
 #define LIMIT_TOP -1
 #define LIMIT_BOTTOM 1
 
-/* STRUCTURES GLOBALES CONVERSION HSVtoRGB ************************************/
+/* VARIABLES GLOBALES *********************************************************/
+/* Conversion HSVtoRGB */
 struct RGB
 {
 	unsigned char R;
@@ -31,6 +34,11 @@ struct HSV
 	double S;
 	double V;
 };
+
+/* SÉMAPHORES ANONYMES */
+sem_t* sem_thread;	// associés aux threads
+sem_t* sem_matrice;	// associé à l'écriture de la matrice
+
 
 /* MANIPULER LES NOMBRES COMPLEXES ********************************************/
 
@@ -192,18 +200,24 @@ int main(int argc, char * argv[]) {
 		int i;*/
 		long double c_real, c_imaginary;
 		int nb_thread, nb_sample;
+		pthread_t* id_thread;
 
 		/* Vérification des arguments */
 		// nb_thread, nb_sample, c_real, c_imaginary
 		if (argc != 5) {
-				printf("4 arguments attendus\n. argc=%c", argc);
+				printf("Usage : <C réel> <C imaginaire> <nb threads> <nb échantillons>\n");
 	 			return 0;
 			}
 
+		// Voir la commande opencv commandlineparser ?
  		c_real = strtold(argv[1], NULL);
 		c_imaginary = strtold(argv[2], NULL);
 		nb_thread = atoi(argv[3]);
 		nb_sample = atoi(argv[4]);
+
+		/* INITIALISATION THREADS, SEMAPHORES ET ECHANTILLONS *********************/
+		id_thread = (pthread_t*) malloc(nb_thread * sizeof(pthread_t));
+  	sem_thread = (sem_t*) malloc(nb_thread * sizeof(sem_t));
 
     // creation de l'image
     cv::Mat newImg(IMG_H, IMG_W, CV_8UC3);
