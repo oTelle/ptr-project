@@ -23,12 +23,11 @@ int nbSample;					// nb d'échantillons
 /* Prototype de fonction de traitement ****************************************/
 void* julia(void* _p) {
 	sample workSample;  // échantillon de travail
-	int i, processing;
+	int processing;
 
 
-	// la fonction tourne en boucle jusqu'à break;
 	/* Lecture matrice pour extraction échantillon ****************************/
-	for(i = 0; i < nbSample; i++) {
+	for(int i = 0; i < nbSample; i++) {
 		processing = 0;
 		// verrouillage de la matrice des échantillons
 		if(matSamples[i].processed == 0) {

@@ -5,7 +5,7 @@
 #include <semaphore.h>
 
 /* Compile avec */
-/* g++ -Wall fractale_julia.cpp `pkg-config --cflags --libs opencv` -lpthread -std=c++11*/
+/* g++ -Wall fractale_julia.cpp `pkg-config --cflags --libs opencv` -lpthread -lm -std=c++11*/
 
 /* CONSTANTES *****************************************************************/
 
@@ -20,6 +20,21 @@
 #define LIMIT_BOTTOM 1
 
 /* VARIABLES GLOBALES *********************************************************/
+// Type échantillon
+typedef struct sample
+{
+	int xStart;
+	int xEnd;
+  int yStart;
+	int yEnd;
+	int processed;
+} sample;
+
+// Matrice des échantillons
+sample *matSamples;
+
+int nbSample;					// nb d'échantillons
+
 /* Conversion HSVtoRGB */
 struct RGB
 {
@@ -37,7 +52,6 @@ struct HSV
 
 /* SÉMAPHORES ANONYMES */
 sem_t semRead;	// une seule lecture à la fois
-sem_t semWrite;	// une seule écriture à la fois
 
 // creation de l'image
 cv::Mat newImg(IMG_H, IMG_W, CV_8UC3);
@@ -175,27 +189,39 @@ int juliaDot(complex z, int iter) {
 void* julia(void* _p) {
     struct HSV data;
     struct RGB value;
+		//sample workSample;   //échantillon de travail
+		int processing;
 
-		/* Verrouillage puis lecture échantillon */
-		sem_wait(&semRead);
+		/* Lecture matrice pour extraction échantillon ****************************/
+		for(int i = 0; i < nbSample; i++) {
+			processing = 0;
+			// verrouillage de la matrice des échantillons
+			sem_wait(&semRead);  // VERIFIER SI LE VERROUILLAGE EST BIEN PLACE
+			if(matSamples[i].processed == 0) {
+				//workSample = matSamples[i];
+				matSamples[i].processed = 1;
+				processing = 1;
+			}
+			// deverrouillage lecture de la Matrice pour laisser l'accès aux autres threads
+			sem_post(&semRead);
 
-		/* Test contenu échantillon (dispo, NULL ou traité) */
+			if (processing == 1) {
+				/* Début calcul fractale sur échantillon */
+				for (int x = matSamples[i].xStart; x <= matSamples[i].xEnd; x++) {
+		        for (int y = matSamples[i].yStart; y <= matSamples[i].yEnd; y++) {
+		            int j = juliaDot(convert(x, y), MAX_ITER);
+		            data.H = j; // pour le moment 0-255 à convertir en 0-1 ?
+		            data.S = 1;
+		            data.V = 1;
+		            value = HSVToRGB(data);
+		            cv::Vec3b color(value.R, value.G, value.B);
+		            newImg.at<cv::Vec3b>(cv::Point(x, y)) = color;
+		        }
+		    }
+				/* fin calcul fractale */
+			}
+		}
 
-		sem_post(&semRead);
-		/* Début calcul fractale sur image entière */
-		for (int x = 0; x < IMG_W; x++) {
-        for (int y = 0; y < IMG_H; y++) {
-            int j = juliaDot(convert(x, y), MAX_ITER);
-            data.H = j; // pour le moment 0-255 à convertir en 0-1 ?
-            data.S = 1;
-            data.V = 1;
-            value = HSVToRGB(data);
-            cv::Vec3b color(value.R, value.G, value.B);
-            //cv::Vec3b color(j, j, j);
-            newImg.at<cv::Vec3b>(cv::Point(x, y)) = color;
-        }
-    }
-		/* fin calcul fractale */
 	return NULL;
 }
 
@@ -210,7 +236,7 @@ int main(int argc, char * argv[]) {
 
 		int i;*/
 		long double cReal, cImaginary;
-		int nbThread, nbSample, i;
+		int nbThread, i, size, rest;
 		pthread_t* idThread;
 
 		/* Vérification des arguments */
@@ -229,23 +255,51 @@ int main(int argc, char * argv[]) {
 		/* INITIALISATION THREADS, SEMAPHORES ET ECHANTILLONS *********************/
 		idThread = (pthread_t*) malloc(nbThread * sizeof(pthread_t));
 		sem_init(&semRead, 0, 1);
-		sem_init(&semWrite, 0, 1);
-
-
-
-
 
 		c = new_complex(cReal, cImaginary);
 
+		/* Construbction de la matrice des échantillons / taille image *************/
+		if(nbSample > IMG_W) {
+			printf("Nombre d'échantillons > colonnes max de l'image. Écrétage à %d\n", IMG_W);
+			nbSample = IMG_W;
+		}
+		matSamples  = (sample *) malloc(nbSample * sizeof(sample));
+		size = IMG_W / nbSample;
+		rest = IMG_W % nbSample;
+	  if(rest == 0) {
+	    // découpage en nbSample morceaux de taille égale
+	    for(i = 0; i < nbSample; i++ ) {
+	      matSamples[i].xStart = i * size;
+	      matSamples[i].xEnd = matSamples[i].xStart + (size -1);
+				matSamples[i].yStart = 0;
+				matSamples[i].yEnd = IMG_H;
+				matSamples[i].processed = 0;
+	    }
+	  }
+	  else {
+	    // découpage en nbSample-1 morceaux taille égale...
+	    for(i = 0; i < nbSample; i++ ) {
+				if(i < rest) {
+					matSamples[i].xStart = i * (size + 1); // on réparti le restant sur le n premier pixels
+					matSamples[i].xEnd = matSamples[i].xStart + (size);
+				}
+				else {
+					matSamples[i].xStart = matSamples[i-1].xEnd + 1;
+		      matSamples[i].xEnd = matSamples[i].xStart + (size -1);
+				}
+				matSamples[i].yStart = 0;
+				matSamples[i].yEnd = IMG_H;
+				matSamples[i].processed = 0;
+	    }
+	  }
+
 		/* CRÉATION DES THREADS ***************************************************/
-		for(i = 0; i < nbSample; i++) {
+		for(i = 0; i < nbThread; i++) {
 	      pthread_create(&idThread[i], NULL, julia, NULL);
 	  }
 
-    //julia(newImg);
-
-		for(i = 0; i < nbSample; i++) {
-	    pthread_join(idThread[i], 0);
+		for(i = 0; i < nbThread; i++) {
+	    	pthread_join(idThread[i], 0);
 	  }
 
     // interaction avec l'utilisateur
@@ -266,9 +320,9 @@ int main(int argc, char * argv[]) {
 
 		/* NETTOYAGE **************************************************************/
 		sem_destroy(&semRead);
-		sem_destroy(&semWrite);
 
 		free(idThread);
+		free(matSamples);
 
     return 0;
 }
